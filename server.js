@@ -1,70 +1,58 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*", // Allow all origins (update for production)
-        methods: ["GET", "POST"],
-    },
-});
+const io = socketIo(server);
 
-const rooms = {}; // Store room details with user info
+const players = {}; // Store player information including peer IDs and usernames
+let roomPlayers = []; // Store list of players in the room
 
-io.on("connection", (socket) => {
-    console.log("A user connected:", socket.id);
+io.on('connection', (socket) => {
+    console.log('A user connected:', socket.id);
 
-    // Join Room
-    socket.on("joinRoom", ({ roomId, username }) => {
-        if (!rooms[roomId]) {
-            rooms[roomId] = []; // Initialize room if it doesn't exist
-        }
-
-        // Add user to the room
-        rooms[roomId].push({ id: socket.id, username });
+    // When a player joins a room
+    socket.on('joinRoom', ({ roomId, username }) => {
         socket.join(roomId);
+        players[socket.id] = { username, socketId: socket.id };
+        roomPlayers.push(socket.id);
 
-        // Notify others in the room
-        io.to(roomId).emit("userJoined", { username, users: rooms[roomId] });
-        console.log(`User ${username} joined room ${roomId}`);
+        console.log(`${username} joined room ${roomId}`);
+
+        // Notify other players in the room
+        socket.to(roomId).emit('newPeer', { peerId: socket.id });
+
+        // Send the list of current players in the room
+        io.to(roomId).emit('playersInRoom', roomPlayers);
     });
 
-    // Handle Messages
-    socket.on("sendMessage", ({ roomId, message }) => {
-        const user = rooms[roomId]?.find((u) => u.id === socket.id);
-        if (user) {
-            io.to(roomId).emit("receiveMessage", {
-                username: user.username,
-                message,
-            });
-            console.log(`Message from ${user.username} in room ${roomId}: ${message}`);
-        }
+    // Handle offer from initiator to other player
+    socket.on('offer', ({ peerId, sdp }) => {
+        io.to(peerId).emit('offer', { peerId: socket.id, sdp });
     });
 
-    // Handle Voice Stream
-    socket.on("voiceStream", ({ roomId, audioData }) => {
-        console.log(audioData)
-        socket.to(roomId).emit("voiceStream", { id: socket.id, audioData });
+    // Handle answer from the other player
+    socket.on('answer', ({ peerId, sdp }) => {
+        io.to(peerId).emit('answer', { peerId: socket.id, sdp });
     });
 
-    // Handle Disconnect
-    socket.on("disconnect", () => {
-        for (const roomId in rooms) {
-            const userIndex = rooms[roomId].findIndex((u) => u.id === socket.id);
-            if (userIndex !== -1) {
-                const [user] = rooms[roomId].splice(userIndex, 1);
-                io.to(roomId).emit("userLeft", { username: user.username, users: rooms[roomId] });
-                console.log(`User ${user.username} left room ${roomId}`);
-                if (rooms[roomId].length === 0) {
-                    delete rooms[roomId]; // Delete room if empty
-                }
-                break;
-            }
-        }
-        console.log("User disconnected:", socket.id);
+    // Handle ICE candidates
+    socket.on('iceCandidate', ({ peerId, candidate }) => {
+        io.to(peerId).emit('iceCandidate', { peerId: socket.id, candidate });
+    });
+
+    // When a player disconnects, clean up
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
+        delete players[socket.id];
+        roomPlayers = roomPlayers.filter(playerId => playerId !== socket.id);
+
+        // Notify the room about the disconnection
+        io.emit('playerDisconnected', socket.id);
     });
 });
 
-server.listen(3000, () => console.log("Server running on port 3000"));
+server.listen(3000, () => {
+    console.log('Server running on http://localhost:3000');
+});
