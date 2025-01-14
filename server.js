@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -6,67 +7,103 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-const players = {}; // Store player information including peer IDs and usernames
-let roomPlayers = []; // Store list of players in the room
+const rooms = {}; // Stores room data
 
+// Serve static files (if needed, for frontend integration)
+app.use(express.static('public'));
+
+// When a client connects
 io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+    console.log('a user connected:', socket.id);
 
-    // When a player joins a room
-    socket.on('joinRoom', ({ roomId, username }) => {
+    // Create a new game room
+    socket.on('createRoom', (data) => {
+        const { roomId, username } = data;
+        if (!rooms[roomId]) {
+            rooms[roomId] = {
+                players: [],
+                gameStarted: false,
+                rolesAssigned: false,
+                votes: {},
+            };
+        }
+        rooms[roomId].players.push({ username, socketId: socket.id });
+        console.log(`Room created: ${roomId} by ${username}`);
         socket.join(roomId);
-        players[socket.id] = { username, socketId: socket.id };
-        roomPlayers.push(socket.id);
-
-        console.log(`${username} joined room ${roomId}`);
-
-        // Notify other players in the room
-        socket.to(roomId).emit('newPeer', { peerId: socket.id });
-
-        // Send the list of current players in the room
-        io.to(roomId).emit('playersInRoom', roomPlayers);
+        io.to(roomId).emit('newPeer', { roomId, username });
     });
 
-    // Handle offer from initiator to other player
-    socket.on('offer', ({ peerId, sdp }) => {
-        console.log(`Received offer from ${socket.id} to ${peerId}`);
-        // Emit offer with type
-        io.to(peerId).emit('offer', { peerId: socket.id, sdp, type: 'offer' });
+    // Join an existing room
+    socket.on('joinRoom', (data) => {
+        const { roomId, username } = data;
+        if (rooms[roomId] && rooms[roomId].gameStarted === false) {
+            rooms[roomId].players.push({ username, socketId: socket.id });
+            console.log(`${username} joined room: ${roomId}`);
+            socket.join(roomId);
+            io.to(roomId).emit('newPeer', { roomId, username });
+        } else {
+            socket.emit('error', 'This room is either full or the game has already started.');
+        }
     });
 
-    // Handle answer from the other player
-    socket.on('answer', ({ peerId, sdp }) => {
-        console.log(`Received answer from ${socket.id} to ${peerId}`);
-        // Emit answer with type
-        io.to(peerId).emit('answer', { peerId: socket.id, sdp, type: 'answer' });
+    // Start the game
+    socket.on('startGame', (data) => {
+        const { roomId } = data;
+        if (rooms[roomId] && !rooms[roomId].gameStarted) {
+            rooms[roomId].gameStarted = true;
+            assignRoles(roomId);
+            io.to(roomId).emit('startGame', { message: 'Game started, roles assigned!' });
+        }
     });
 
-    // Handle ICE candidates
-    socket.on('iceCandidate', ({ peerId, candidate }) => {
-        io.to(peerId).emit('iceCandidate', { peerId: socket.id, candidate });
+    // Assign roles
+    const assignRoles = (roomId) => {
+        const room = rooms[roomId];
+        const spyIndex = Math.floor(Math.random() * room.players.length);
+        room.players.forEach((player, index) => {
+            const role = index === spyIndex ? 'Spy' : 'Innocent';
+            io.to(player.socketId).emit('rolesAssigned', { role });
+            player.role = role; // Save role for future use
+        });
+        room.rolesAssigned = true;
+    };
+
+    // Player votes for the spy
+    socket.on('vote', (data) => {
+        const { roomId, votedPlayerId } = data;
+        if (rooms[roomId]) {
+            rooms[roomId].votes[votedPlayerId] = (rooms[roomId].votes[votedPlayerId] || 0) + 1;
+            console.log(`Vote casted for player ${votedPlayerId} in room ${roomId}`);
+        }
     });
 
-    // Start the game when the 'startGame' event is received
-    socket.on('startGame', ({ roomId }) => {
-        console.log(`Starting game in room: ${roomId}`);
-
-        // Notify all players in the room that the game is starting
-        io.to(roomId).emit('gameStarted', { message: 'The game has started!' });
-
-        // Optionally, you can reset or initialize any game state here
+    // End the game
+    socket.on('endGame', (data) => {
+        const { roomId, winner } = data;
+        if (rooms[roomId]) {
+            const room = rooms[roomId];
+            room.gameStarted = false;
+            io.to(roomId).emit('endGame', { winner });
+            console.log(`Game ended in room ${roomId}. Winner: ${winner}`);
+        }
     });
 
-    // When a player disconnects, clean up
+    // Handle player disconnect
     socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
-        delete players[socket.id];
-        roomPlayers = roomPlayers.filter(playerId => playerId !== socket.id);
-
-        // Notify the room about the disconnection
-        io.emit('playerDisconnected', socket.id);
+        console.log('user disconnected:', socket.id);
+        for (let roomId in rooms) {
+            const room = rooms[roomId];
+            room.players = room.players.filter(player => player.socketId !== socket.id);
+            if (room.players.length === 0) {
+                delete rooms[roomId]; // Delete empty room
+            } else {
+                io.to(roomId).emit('newPeer', { message: 'A player has left the room.' });
+            }
+        }
     });
 });
 
+// Start the server
 server.listen(3000, () => {
-    console.log('Server running on http://localhost:3000');
+    console.log('Server is running on http://localhost:3000');
 });
