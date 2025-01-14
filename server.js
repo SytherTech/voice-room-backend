@@ -28,18 +28,18 @@ io.on('connection', (socket) => {
     });
 
     // Handle offer from initiator to other player
-    // Handle offer from initiator to other player
     socket.on('offer', ({ peerId, sdp }) => {
         console.log(`Received offer from ${socket.id} to ${peerId}`);
-        io.to(peerId).emit('offer', { peerId: socket.id, sdp });
+        // Emit offer with type
+        io.to(peerId).emit('offer', { peerId: socket.id, sdp, type: 'offer' });
     });
 
     // Handle answer from the other player
     socket.on('answer', ({ peerId, sdp }) => {
         console.log(`Received answer from ${socket.id} to ${peerId}`);
-        io.to(peerId).emit('answer', { peerId: socket.id, sdp });
+        // Emit answer with type
+        io.to(peerId).emit('answer', { peerId: socket.id, sdp, type: 'answer' });
     });
-
 
     // Handle ICE candidates
     socket.on('iceCandidate', ({ peerId, candidate }) => {
