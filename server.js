@@ -1,109 +1,94 @@
-// server.js
 const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-
 const app = express();
-const server = http.createServer(app);
-const io = socketIo(server);
+const server = require('http').createServer(app);
+const { Server } = require('socket.io');
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+const mongoose = require('mongoose');
 
-const rooms = {}; // Stores room data
+mongoose.connect('mongodb://localhost:27017/voicechat', {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+}).then(() => {
+    console.log('Connected to MongoDB');
+}).catch((error) => {
+    console.log('MongoDB connection error:', error);
+});
 
-// Serve static files (if needed, for frontend integration)
-app.use(express.static('public'));
+const Room = mongoose.model('Room', {
+    roomId: String,
+    participants: [{
+        socketId: String,
+        name: String,
+        position: Number
+    }]
+});
 
-// When a client connects
 io.on('connection', (socket) => {
-    console.log('a user connected:', socket.id);
-
-    // Create a new game room
-    socket.on('createRoom', (data) => {
-        const { roomId, username } = data;
-        if (!rooms[roomId]) {
-            rooms[roomId] = {
-                players: [],
-                gameStarted: false,
-                rolesAssigned: false,
-                votes: {},
-            };
-        }
-        rooms[roomId].players.push({ username, socketId: socket.id });
-        console.log(`Room created: ${roomId} by ${username}`);
-        socket.join(roomId);
-        io.to(roomId).emit('newPeer', { roomId, username });
-    });
-
-    // Join an existing room
-    socket.on('joinRoom', (data) => {
-        const { roomId, username } = data;
-        if (rooms[roomId] && rooms[roomId].gameStarted === false) {
-            rooms[roomId].players.push({ username, socketId: socket.id });
-            console.log(`${username} joined room: ${roomId}`);
-            socket.join(roomId);
-            io.to(roomId).emit('newPeer', { roomId, username });
-        } else {
-            socket.emit('error', 'This room is either full or the game has already started.');
-        }
-    });
-
-    // Start the game
-    socket.on('startGame', (data) => {
-        const { roomId } = data;
-        if (rooms[roomId] && !rooms[roomId].gameStarted) {
-            rooms[roomId].gameStarted = true;
-            assignRoles(roomId);
-            io.to(roomId).emit('startGame', { message: 'Game started, roles assigned!' });
-        }
-    });
-
-    // Assign roles
-    const assignRoles = (roomId) => {
-        const room = rooms[roomId];
-        const spyIndex = Math.floor(Math.random() * room.players.length);
-        room.players.forEach((player, index) => {
-            const role = index === spyIndex ? 'Spy' : 'Innocent';
-            io.to(player.socketId).emit('rolesAssigned', { role });
-            player.role = role; // Save role for future use
-        });
-        room.rolesAssigned = true;
-    };
-
-    // Player votes for the spy
-    socket.on('vote', (data) => {
-        const { roomId, votedPlayerId } = data;
-        if (rooms[roomId]) {
-            rooms[roomId].votes[votedPlayerId] = (rooms[roomId].votes[votedPlayerId] || 0) + 1;
-            console.log(`Vote casted for player ${votedPlayerId} in room ${roomId}`);
-        }
-    });
-
-    // End the game
-    socket.on('endGame', (data) => {
-        const { roomId, winner } = data;
-        if (rooms[roomId]) {
-            const room = rooms[roomId];
-            room.gameStarted = false;
-            io.to(roomId).emit('endGame', { winner });
-            console.log(`Game ended in room ${roomId}. Winner: ${winner}`);
-        }
-    });
-
-    // Handle player disconnect
-    socket.on('disconnect', () => {
-        console.log('user disconnected:', socket.id);
-        for (let roomId in rooms) {
-            const room = rooms[roomId];
-            room.players = room.players.filter(player => player.socketId !== socket.id);
-            if (room.players.length === 0) {
-                delete rooms[roomId]; // Delete empty room
-            } else {
-                io.to(roomId).emit('newPeer', { message: 'A player has left the room.' });
+    socket.on('join_room', async ({ roomId, name }) => {
+        try {
+            let room = await Room.findOne({ roomId });
+            if (!room) {
+                room = new Room({ roomId, participants: [] });
             }
+
+            const position = room.participants.length;
+            const newParticipant = { socketId: socket.id, name, position };
+
+            room.participants.push(newParticipant);
+            await room.save();
+
+            socket.join(roomId);
+
+            const existingParticipants = room.participants.filter(p => p.socketId !== socket.id);
+            socket.emit('existing_participants', existingParticipants);
+
+            socket.to(roomId).emit('user_joined', newParticipant);
+
+            console.log(`User ${name} joined room ${roomId} at position ${position}`);
+        } catch (error) {
+            console.error('Error in join_room:', error);
+        }
+    });
+
+    socket.on('offer', async (data) => {
+        console.log(`offer Data : ${data.sdp}`)
+        io.to(data.targetSocketId).emit('offer', {
+            sdp: data.sdp,
+            fromSocketId: socket.id
+        });
+    });
+
+    socket.on('answer', async (data) => {
+        console.log(`answer Data : ${data}`)
+        io.to(data.targetSocketId).emit('answer', {
+            sdp: data.sdp,
+            fromSocketId: socket.id
+        });
+    });
+
+    socket.on('ice_candidate', (data) => {
+        console.log(`Ice Data : ${data}`)
+        io.to(data.targetSocketId).emit('ice_candidate', {
+            candidate: data.candidate,
+            fromSocketId: socket.id
+        });
+    });
+
+    socket.on('disconnect', async () => {
+        const room = await Room.findOne({ 'participants.socketId': socket.id });
+        if (room) {
+            room.participants = room.participants.filter(p => p.socketId !== socket.id);
+            await room.save();
+            io.to(room.roomId).emit('user_left', { socketId: socket.id });
         }
     });
 });
 
-// Start the server
 server.listen(3000, () => {
-    console.log('Server is running on http://localhost:3000');
+    console.log('Server running on port 3000');
 });
