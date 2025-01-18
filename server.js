@@ -10,7 +10,7 @@ const io = new Server(server, {
 });
 const mongoose = require('mongoose');
 
-mongoose.connect('mongodb://localhost:27017/voicechat', {
+mongoose.connect('mongodb+srv://abdullah_bconsulting:bEotRMwlEmxiWqpw@b-consltuing.ufwab.mongodb.net/voicecha', {
     useNewUrlParser: true,
     useUnifiedTopology: true
 }).then(() => {
