@@ -1,5 +1,5 @@
 const socket = io();
-const roomId = document.getElementById('roomId').innerText;
+const roomId = document.getElementById('roomId')?.innerText || '';  // Make sure this element exists
 
 let localStream;
 const peerConnections = {};
@@ -14,65 +14,69 @@ const config = {
 // Request microphone access and join the room
 async function joinRoom() {
     const userName = prompt('Enter your name:');
-    if (!userName) return;
+    if (!userName || !roomId) return;
 
     // Capture local audio stream
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    addLocalAudio();
+    try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        addLocalAudio();
 
-    socket.emit('join_room', { roomId, name: userName });
+        socket.emit('join_room', { roomId, name: userName });
 
-    // Handle existing participants
-    socket.on('existing_participants', (participants) => {
-        participants.forEach((participant) => createOffer(participant.socketId));
-    });
-
-    // Handle a new participant joining
-    socket.on('user_joined', (participant) => {
-        createOffer(participant.socketId);
-    });
-
-    // Handle receiving an offer
-    socket.on('offer', async ({ sdp, fromSocketId }) => {
-        const peerConnection = createPeerConnection(fromSocketId);
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        socket.emit('answer', {
-            sdp: peerConnection.localDescription,
-            targetSocketId: fromSocketId,
+        // Handle existing participants
+        socket.on('existing_participants', (participants) => {
+            participants.forEach((participant) => createOffer(participant.socketId));
         });
-    });
 
-    // Handle receiving an answer
-    socket.on('answer', async ({ sdp, fromSocketId }) => {
-        const peerConnection = peerConnections[fromSocketId];
-        if (peerConnection) {
+        // Handle a new participant joining
+        socket.on('user_joined', (participant) => {
+            createOffer(participant.socketId);
+        });
+
+        // Handle receiving an offer
+        socket.on('offer', async ({ sdp, fromSocketId }) => {
+            const peerConnection = createPeerConnection(fromSocketId);
             await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-        }
-    });
 
-    // Handle receiving ICE candidates
-    socket.on('ice_candidate', ({ candidate, fromSocketId }) => {
-        const peerConnection = peerConnections[fromSocketId];
-        if (peerConnection) {
-            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-        }
-    });
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
 
-    // Handle a participant leaving
-    socket.on('user_left', ({ socketId }) => {
-        const audioElement = document.getElementById(socketId);
-        if (audioElement) audioElement.remove();
+            socket.emit('answer', {
+                sdp: peerConnection.localDescription,
+                targetSocketId: fromSocketId,
+            });
+        });
 
-        const peerConnection = peerConnections[socketId];
-        if (peerConnection) {
-            peerConnection.close();
-            delete peerConnections[socketId];
-        }
-    });
+        // Handle receiving an answer
+        socket.on('answer', async ({ sdp, fromSocketId }) => {
+            const peerConnection = peerConnections[fromSocketId];
+            if (peerConnection) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+            }
+        });
+
+        // Handle receiving ICE candidates
+        socket.on('ice_candidate', ({ candidate, fromSocketId }) => {
+            const peerConnection = peerConnections[fromSocketId];
+            if (peerConnection) {
+                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+        });
+
+        // Handle a participant leaving
+        socket.on('user_left', ({ socketId }) => {
+            const audioElement = document.getElementById(socketId);
+            if (audioElement) audioElement.remove();
+
+            const peerConnection = peerConnections[socketId];
+            if (peerConnection) {
+                peerConnection.close();
+                delete peerConnections[socketId];
+            }
+        });
+    } catch (error) {
+        console.error('Error accessing media devices:', error);
+    }
 }
 
 // Create a new RTCPeerConnection
@@ -123,6 +127,7 @@ function addLocalAudio() {
     audioElement.srcObject = localStream;
     audioElement.autoplay = true;
     audioElement.muted = true; // Mute local audio playback
+    audioElement.id = 'localAudio'; // Assign an id to local audio
     document.body.appendChild(audioElement);
 }
 
