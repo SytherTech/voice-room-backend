@@ -1,47 +1,130 @@
 const socket = io();
-
 const roomId = document.getElementById('roomId').innerText;
-const participantsDiv = document.getElementById('participants');
-const muteToggle = document.getElementById('muteToggle');
-const leaveButton = document.getElementById('leave');
 
-let isMuted = false;
+let localStream;
+const peerConnections = {};
+const config = {
+    iceServers: [
+        {
+            urls: 'stun:stun.l.google.com:19302',
+        },
+    ],
+};
 
-// Join the room
-socket.emit('join_room', { roomId, name: prompt('Enter your name:') });
+// Request microphone access and join the room
+async function joinRoom() {
+    const userName = prompt('Enter your name:');
+    if (!userName) return;
 
-// Handle existing participants
-socket.on('existing_participants', (participants) => {
-    participants.forEach(addParticipant);
-});
+    // Capture local audio stream
+    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    addLocalAudio();
 
-// Handle a new participant joining
-socket.on('user_joined', (participant) => {
-    addParticipant(participant);
-});
+    socket.emit('join_room', { roomId, name: userName });
 
-// Handle a participant leaving
-socket.on('user_left', ({ socketId }) => {
-    const participantDiv = document.getElementById(socketId);
-    if (participantDiv) participantDiv.remove();
-});
+    // Handle existing participants
+    socket.on('existing_participants', (participants) => {
+        participants.forEach((participant) => createOffer(participant.socketId));
+    });
 
-// Mute/unmute logic
-muteToggle.addEventListener('click', () => {
-    isMuted = !isMuted;
-    muteToggle.innerText = isMuted ? 'Unmute' : 'Mute';
-});
+    // Handle a new participant joining
+    socket.on('user_joined', (participant) => {
+        createOffer(participant.socketId);
+    });
 
-// Leave room
-leaveButton.addEventListener('click', () => {
-    socket.disconnect();
-    window.location.href = '/';
-});
+    // Handle receiving an offer
+    socket.on('offer', async ({ sdp, fromSocketId }) => {
+        const peerConnection = createPeerConnection(fromSocketId);
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
 
-// Helper to add a participant to the UI
-function addParticipant(participant) {
-    const div = document.createElement('div');
-    div.id = participant.socketId;
-    div.innerText = participant.name;
-    participantsDiv.appendChild(div);
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+
+        socket.emit('answer', {
+            sdp: peerConnection.localDescription,
+            targetSocketId: fromSocketId,
+        });
+    });
+
+    // Handle receiving an answer
+    socket.on('answer', async ({ sdp, fromSocketId }) => {
+        const peerConnection = peerConnections[fromSocketId];
+        if (peerConnection) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+        }
+    });
+
+    // Handle receiving ICE candidates
+    socket.on('ice_candidate', ({ candidate, fromSocketId }) => {
+        const peerConnection = peerConnections[fromSocketId];
+        if (peerConnection) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+    });
+
+    // Handle a participant leaving
+    socket.on('user_left', ({ socketId }) => {
+        const audioElement = document.getElementById(socketId);
+        if (audioElement) audioElement.remove();
+
+        const peerConnection = peerConnections[socketId];
+        if (peerConnection) {
+            peerConnection.close();
+            delete peerConnections[socketId];
+        }
+    });
 }
+
+// Create a new RTCPeerConnection
+function createPeerConnection(socketId) {
+    const peerConnection = new RTCPeerConnection(config);
+
+    // Add local audio stream to the connection
+    localStream.getTracks().forEach((track) => {
+        peerConnection.addTrack(track, localStream);
+    });
+
+    // Handle receiving remote audio stream
+    peerConnection.ontrack = (event) => {
+        const audioElement = document.createElement('audio');
+        audioElement.id = socketId;
+        audioElement.srcObject = event.streams[0];
+        audioElement.autoplay = true;
+        document.body.appendChild(audioElement);
+    };
+
+    // Handle ICE candidates
+    peerConnection.onicecandidate = ({ candidate }) => {
+        if (candidate) {
+            socket.emit('ice_candidate', { candidate, targetSocketId: socketId });
+        }
+    };
+
+    peerConnections[socketId] = peerConnection;
+    return peerConnection;
+}
+
+// Create an offer for a new participant
+async function createOffer(socketId) {
+    const peerConnection = createPeerConnection(socketId);
+
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+
+    socket.emit('offer', {
+        sdp: peerConnection.localDescription,
+        targetSocketId: socketId,
+    });
+}
+
+// Add local audio to the UI
+function addLocalAudio() {
+    const audioElement = document.createElement('audio');
+    audioElement.srcObject = localStream;
+    audioElement.autoplay = true;
+    audioElement.muted = true; // Mute local audio playback
+    document.body.appendChild(audioElement);
+}
+
+// Initialize the app
+joinRoom();
