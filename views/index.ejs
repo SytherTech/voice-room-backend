@@ -4,25 +4,102 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voice Room</title>
-    <script src="/socket.io/socket.io.js"></script>
-    <link rel="stylesheet" href="/styles.css">
-    <script defer src="/main.js"></script>
-
+    <title>Voice Chat Room</title>
+    <link rel="stylesheet" href="/style.css">
 </head>
 
 <body>
-    <h1>Voice Room</h1>
-    <div id="roomId" style="display: none;">
-        <%= roomId %>
-    </div> <!-- Hidden roomId element -->
-    <div id="userName" style="display: none;">
-        <%= userName %>
-    </div> <!-- Hidden userName element -->
+    <div class="container">
+        <h1>Voice Chat Room</h1>
+        <div id="room-controls">
+            <input type="text" id="roomId" placeholder="Enter Room ID" />
+            <input type="text" id="userName" placeholder="Enter Your Name" />
+            <button id="joinBtn">Join Room</button>
+        </div>
 
-    <h3>Room ID: <%= roomId %>
-    </h3>
-    <div id="participants"></div>
+        <div id="room" style="display:none;">
+            <h2>Room ID: <span id="roomDisplay"></span></h2>
+            <div id="participants"></div>
+            <div id="local-stream"></div>
+            <button id="leaveBtn">Leave Room</button>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let roomId;
+        let userName;
+        let localStream;
+        const peerConnections = {};
+
+        // Handle room join
+        document.getElementById('joinBtn').addEventListener('click', async () => {
+            roomId = document.getElementById('roomId').value;
+            userName = document.getElementById('userName').value;
+
+            if (roomId && userName) {
+                document.getElementById('room-controls').style.display = 'none';
+                document.getElementById('room').style.display = 'block';
+                document.getElementById('roomDisplay').textContent = roomId;
+
+                // Request microphone access
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // Add local audio to the page
+                const localAudio = document.createElement('audio');
+                localAudio.srcObject = localStream;
+                localAudio.autoplay = true;
+                localAudio.muted = true; // Mute local audio
+                document.getElementById('local-stream').appendChild(localAudio);
+
+                // Join the room
+                socket.emit('join_room', roomId, userName);
+            }
+        });
+
+        // Handle existing participants joining
+        socket.on('user_joined', (userName) => {
+            alert(`${userName} has joined the room`);
+        });
+
+        // Handle WebRTC signaling
+        socket.on('offer', async (data) => {
+            const peerConnection = new RTCPeerConnection();
+            peerConnections[data.fromSocketId] = peerConnection;
+
+            // Add local stream to peer connection
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            socket.emit('answer', {
+                sdp: answer,
+                targetSocketId: data.fromSocketId,
+            });
+        });
+
+        socket.on('answer', async (data) => {
+            const peerConnection = peerConnections[data.fromSocketId];
+            if (peerConnection) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+            }
+        });
+
+        socket.on('ice_candidate', (data) => {
+            const peerConnection = peerConnections[data.fromSocketId];
+            if (peerConnection) {
+                peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+            }
+        });
+
+        // Leave Room
+        document.getElementById('leaveBtn').addEventListener('click', () => {
+            socket.disconnect();
+            window.location.reload();
+        });
+    </script>
 </body>
 
 </html>

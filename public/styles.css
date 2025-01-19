@@ -1,28 +1,24 @@
 body {
-    background-color: #282c34;
-    color: white;
     font-family: Arial, sans-serif;
     text-align: center;
+    padding: 50px;
+    background-color: #f0f0f0;
 }
 
-#app {
-    margin-top: 50px;
+.container {
+    max-width: 600px;
+    margin: 0 auto;
 }
 
-#participants {
-    display: flex;
-    justify-content: center;
-    flex-wrap: wrap;
+#room-controls {
+    margin-bottom: 20px;
+}
+
+#room {
     margin-top: 20px;
 }
 
-#participants div {
-    background-color: #4CAF50;
-    margin: 10px;
-    padding: 10px;
-    border-radius: 5px;
-}
-
-#controls {
-    margin-top: 20px;
+audio {
+    margin-top: 10px;
+    width: 100%;
 }
