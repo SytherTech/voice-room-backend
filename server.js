@@ -1,67 +1,79 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const mongoose = require('mongoose');
 const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Serve static files (like CSS)
+// Middleware
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Set up EJS as the view engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// Home route to render the room creation page
+// MongoDB connection (optional, for storing rooms/users)
+mongoose
+    .connect('mongodb+srv://abdullah_bconsulting:bEotRMwlEmxiWqpw@b-consltuing.ufwab.mongodb.net/realestate', {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+    })
+    .then(() => console.log('Connected to MongoDB'))
+    .catch((error) => console.error('MongoDB connection error:', error));
+
+// Routes
 app.get('/', (req, res) => {
-    res.render('index');
+    res.render('index', { roomId: '', userName: '' });
 });
 
-// WebSocket connection for signaling
+app.get('/room/:roomId', (req, res) => {
+    const { roomId } = req.params;
+    res.render('index', { roomId, userName: '' });
+});
+
+// WebSocket events
 io.on('connection', (socket) => {
-    console.log('a user connected', socket.id);
+    console.log(`New connection: ${socket.id}`);
 
-    // Join a specific room
-    socket.on('join_room', (roomId, userName) => {
+    socket.on('join_room', async ({ roomId, name }) => {
+        console.log(`${name} joined room ${roomId}`);
         socket.join(roomId);
-        console.log(`${userName} joined room ${roomId}`);
-        socket.to(roomId).emit('user_joined', userName);
+        socket.to(roomId).emit('user_joined', { socketId: socket.id, name });
+
+        // Send existing participants
+        io.to(roomId).emit('existing_participants', Array.from(io.sockets.adapter.rooms.get(roomId)).map(id => ({ socketId: id })));
     });
 
-    // Send an offer to a user
     socket.on('offer', (data) => {
-        socket.to(data.targetSocketId).emit('offer', {
+        io.to(data.targetSocketId).emit('offer', {
             sdp: data.sdp,
             fromSocketId: socket.id,
         });
     });
 
-    // Send an answer to a user
     socket.on('answer', (data) => {
-        socket.to(data.targetSocketId).emit('answer', {
+        io.to(data.targetSocketId).emit('answer', {
             sdp: data.sdp,
             fromSocketId: socket.id,
         });
     });
 
-    // Send ICE candidate to a user
     socket.on('ice_candidate', (data) => {
-        socket.to(data.targetSocketId).emit('ice_candidate', {
+        io.to(data.targetSocketId).emit('ice_candidate', {
             candidate: data.candidate,
             fromSocketId: socket.id,
         });
     });
 
-    // Handle user disconnection
     socket.on('disconnect', () => {
-        console.log('a user disconnected', socket.id);
+        console.log(`User disconnected: ${socket.id}`);
+        io.emit('user_left', { socketId: socket.id });
     });
 });
 
-// Start the server
-const PORT = 3000;
+// Start server
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });

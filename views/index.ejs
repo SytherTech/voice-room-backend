@@ -5,100 +5,166 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Voice Chat Room</title>
-    <link rel="stylesheet" href="/style.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/peerjs@1.0.0/dist/peer.min.js"></script>
+    <style>
+        /* Simple styling for the page */
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        audio {
+            margin: 10px;
+            border-radius: 5px;
+        }
+    </style>
 </head>
 
 <body>
-    <div class="container">
-        <h1>Voice Chat Room</h1>
-        <div id="room-controls">
-            <input type="text" id="roomId" placeholder="Enter Room ID" />
-            <input type="text" id="userName" placeholder="Enter Your Name" />
-            <button id="joinBtn">Join Room</button>
-        </div>
-
-        <div id="room" style="display:none;">
-            <h2>Room ID: <span id="roomDisplay"></span></h2>
-            <div id="participants"></div>
-            <div id="local-stream"></div>
-            <button id="leaveBtn">Leave Room</button>
-        </div>
+    <h1>Voice Chat Room</h1>
+    <div>
+        <label for="roomId">Room ID: </label>
+        <span id="roomId">
+            <%= roomId %>
+        </span>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
-        let roomId;
-        let userName;
+        const roomId = document.getElementById('roomId').innerText;
         let localStream;
         const peerConnections = {};
+        const config = {
+            iceServers: [
+                {
+                    urls: 'stun:stun.l.google.com:19302',
+                },
+            ],
+        };
 
-        // Handle room join
-        document.getElementById('joinBtn').addEventListener('click', async () => {
-            roomId = document.getElementById('roomId').value;
-            userName = document.getElementById('userName').value;
+        // Request microphone access and join the room
+        async function joinRoom() {
+            const userName = prompt('Enter your name:');
+            if (!userName || !roomId) return;
 
-            if (roomId && userName) {
-                document.getElementById('room-controls').style.display = 'none';
-                document.getElementById('room').style.display = 'block';
-                document.getElementById('roomDisplay').textContent = roomId;
-
-                // Request microphone access
+            try {
+                // Capture local audio stream
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                addLocalAudio();
 
-                // Add local audio to the page
-                const localAudio = document.createElement('audio');
-                localAudio.srcObject = localStream;
-                localAudio.autoplay = true;
-                localAudio.muted = true; // Mute local audio
-                document.getElementById('local-stream').appendChild(localAudio);
+                // Join room and send username
+                socket.emit('join_room', { roomId, name: userName });
 
-                // Join the room
-                socket.emit('join_room', roomId, userName);
+                // Handle existing participants
+                socket.on('existing_participants', (participants) => {
+                    participants.forEach((participant) => createOffer(participant.socketId));
+                });
+
+                // Handle a new participant joining
+                socket.on('user_joined', (participant) => {
+                    createOffer(participant.socketId);
+                });
+
+                // Handle receiving an offer
+                socket.on('offer', async ({ sdp, fromSocketId }) => {
+                    const peerConnection = createPeerConnection(fromSocketId);
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+
+                    socket.emit('answer', {
+                        sdp: peerConnection.localDescription,
+                        targetSocketId: fromSocketId,
+                    });
+                });
+
+                // Handle receiving an answer
+                socket.on('answer', async ({ sdp, fromSocketId }) => {
+                    const peerConnection = peerConnections[fromSocketId];
+                    if (peerConnection) {
+                        await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                    }
+                });
+
+                // Handle receiving ICE candidates
+                socket.on('ice_candidate', ({ candidate, fromSocketId }) => {
+                    const peerConnection = peerConnections[fromSocketId];
+                    if (peerConnection) {
+                        peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    }
+                });
+
+                // Handle a participant leaving
+                socket.on('user_left', ({ socketId }) => {
+                    const audioElement = document.getElementById(socketId);
+                    if (audioElement) audioElement.remove();
+
+                    const peerConnection = peerConnections[socketId];
+                    if (peerConnection) {
+                        peerConnection.close();
+                        delete peerConnections[socketId];
+                    }
+                });
+            } catch (error) {
+                console.error('Error accessing media devices:', error);
             }
-        });
+        }
 
-        // Handle existing participants joining
-        socket.on('user_joined', (userName) => {
-            alert(`${userName} has joined the room`);
-        });
+        // Create a new RTCPeerConnection
+        function createPeerConnection(socketId) {
+            const peerConnection = new RTCPeerConnection(config);
 
-        // Handle WebRTC signaling
-        socket.on('offer', async (data) => {
-            const peerConnection = new RTCPeerConnection();
-            peerConnections[data.fromSocketId] = peerConnection;
-
-            // Add local stream to peer connection
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-
-            socket.emit('answer', {
-                sdp: answer,
-                targetSocketId: data.fromSocketId,
+            // Add local audio stream to the connection
+            localStream.getTracks().forEach((track) => {
+                peerConnection.addTrack(track, localStream);
             });
-        });
 
-        socket.on('answer', async (data) => {
-            const peerConnection = peerConnections[data.fromSocketId];
-            if (peerConnection) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
-            }
-        });
+            // Handle receiving remote audio stream
+            peerConnection.ontrack = (event) => {
+                const audioElement = document.createElement('audio');
+                audioElement.id = socketId;
+                audioElement.srcObject = event.streams[0];
+                audioElement.autoplay = true;
+                document.body.appendChild(audioElement);
+            };
 
-        socket.on('ice_candidate', (data) => {
-            const peerConnection = peerConnections[data.fromSocketId];
-            if (peerConnection) {
-                peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-            }
-        });
+            // Handle ICE candidates
+            peerConnection.onicecandidate = ({ candidate }) => {
+                if (candidate) {
+                    socket.emit('ice_candidate', { candidate, targetSocketId: socketId });
+                }
+            };
 
-        // Leave Room
-        document.getElementById('leaveBtn').addEventListener('click', () => {
-            socket.disconnect();
-            window.location.reload();
-        });
+            peerConnections[socketId] = peerConnection;
+            return peerConnection;
+        }
+
+        // Create an offer for a new participant
+        async function createOffer(socketId) {
+            const peerConnection = createPeerConnection(socketId);
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            socket.emit('offer', {
+                sdp: peerConnection.localDescription,
+                targetSocketId: socketId,
+            });
+        }
+
+        // Add local audio to the UI
+        function addLocalAudio() {
+            const audioElement = document.createElement('audio');
+            audioElement.srcObject = localStream;
+            audioElement.autoplay = true;
+            audioElement.muted = true; // Mute local audio playback
+            audioElement.id = 'localAudio'; // Assign an id to local audio
+            document.body.appendChild(audioElement);
+        }
+
+        // Initialize the app
+        joinRoom();
     </script>
 </body>
 
