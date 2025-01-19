@@ -1,20 +1,18 @@
 const socket = io();
-const roomId = document.getElementById('roomId')?.innerText || '';  // Make sure this element exists
+const roomId = document.getElementById('roomId').innerText;
 
 let localStream;
 const peerConnections = {};
 const config = {
     iceServers: [
-        {
-            urls: 'stun:stun.l.google.com:19302',
-        },
+        { urls: 'stun:stun.l.google.com:19302' },
     ],
 };
 
 // Request microphone access and join the room
 async function joinRoom() {
     const userName = prompt('Enter your name:');
-    if (!userName || !roomId) return;
+    if (!userName) return;
 
     // Capture local audio stream
     try {

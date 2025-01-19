@@ -5,56 +5,22 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Voice Room</title>
-    <link rel="stylesheet" href="/styles.css">
+    <script src="/socket.io/socket.io.js"></script>
+    <script defer src="/js/main.js"></script>
 </head>
 
 <body>
-    <div id="app">
-        <h1>Voice Room: <%= roomId %>
-        </h1>
-        <div id="participants"></div>
-        <div id="controls">
-            <button id="muteButton">Mute</button>
-            <button id="leaveButton">Leave</button>
-        </div>
-    </div>
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    <script>
-        const socket = io();
-        const roomId = "<%= roomId %>";
-        const userName = prompt("Enter your name:");
+    <h1>Voice Room</h1>
+    <div id="roomId" style="display: none;">
+        <%= roomId %>
+    </div> <!-- Hidden roomId element -->
+    <div id="userName" style="display: none;">
+        <%= userName %>
+    </div> <!-- Hidden userName element -->
 
-        socket.emit('join_room', { roomId, name: userName });
-
-        socket.on('existing_participants', (participants) => {
-            participants.forEach((participant) => {
-                addParticipant(participant);
-            });
-        });
-
-        socket.on('user_joined', (participant) => {
-            addParticipant(participant);
-        });
-
-        function addParticipant(participant) {
-            const div = document.createElement('div');
-            div.id = participant.socketId;
-            div.innerText = participant.name;
-            document.getElementById('participants').appendChild(div);
-        }
-
-        socket.on('user_left', (data) => {
-            const div = document.getElementById(data.socketId);
-            if (div) div.remove();
-        });
-
-        document.getElementById('leaveButton').onclick = () => {
-            socket.disconnect();
-            location.href = '/';
-        };
-    </script>
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    <script src="/main.js"></script>
+    <h3>Room ID: <%= roomId %>
+    </h3>
+    <div id="participants"></div>
 </body>
 
 </html>
