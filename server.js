@@ -14,7 +14,7 @@ const io = new Server(server, {
 
 // MongoDB connection
 mongoose
-    .connect('your_mongo_connection_string', {
+    .connect('mongodb+srv://abdullah_bconsulting:bEotRMwlEmxiWqpw@b-consltuing.ufwab.mongodb.net/voicecha', {
         useNewUrlParser: true,
         useUnifiedTopology: true,
     })
