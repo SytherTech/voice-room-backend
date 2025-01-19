@@ -31,25 +31,38 @@ async function joinRoom() {
             createOffer(participant.socketId);
         });
 
-        // Handle receiving an offer
         socket.on('offer', async ({ sdp, fromSocketId }) => {
             const peerConnection = createPeerConnection(fromSocketId);
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
 
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
+            try {
+                // Ensure the peer connection is not in the wrong state
+                if (peerConnection.signalingState === 'stable') {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
 
-            socket.emit('answer', {
-                sdp: peerConnection.localDescription,
-                targetSocketId: fromSocketId,
-            });
+                    const answer = await peerConnection.createAnswer();
+                    await peerConnection.setLocalDescription(answer);
+
+                    socket.emit('answer', {
+                        sdp: peerConnection.localDescription,
+                        targetSocketId: fromSocketId,
+                    });
+                } else {
+                    console.log('Peer connection is not in a stable state yet');
+                }
+            } catch (error) {
+                console.error('Error while handling offer:', error);
+            }
         });
 
         // Handle receiving an answer
         socket.on('answer', async ({ sdp, fromSocketId }) => {
             const peerConnection = peerConnections[fromSocketId];
-            if (peerConnection) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+            if (peerConnection && peerConnection.signalingState !== 'stable') {
+                try {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
+                } catch (error) {
+                    console.error('Error while setting remote description for answer:', error);
+                }
             }
         });
 
