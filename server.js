@@ -14,13 +14,10 @@ const io = new Server(server, {
 
 // MongoDB connection
 mongoose
-    .connect(
-        'mongodb+srv://abdullah_bconsulting:bEotRMwlEmxiWqpw@b-consltuing.ufwab.mongodb.net/voicecha',
-        {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-        }
-    )
+    .connect('your_mongo_connection_string', {
+        useNewUrlParser: true,
+        useUnifiedTopology: true,
+    })
     .then(() => console.log('Connected to MongoDB'))
     .catch((error) => console.error('MongoDB connection error:', error));
 
@@ -31,7 +28,6 @@ const Room = mongoose.model('Room', {
         {
             socketId: String,
             name: String,
-            position: Number,
         },
     ],
 });
@@ -48,10 +44,13 @@ io.on('connection', (socket) => {
                 room = new Room({ roomId, participants: [] });
             }
 
-            // Assign position based on existing participants
-            const position = room.participants.length;
-            const newParticipant = { socketId: socket.id, name, position };
+            // Prevent duplicate participants
+            if (room.participants.some((p) => p.socketId === socket.id)) {
+                socket.emit('error', 'User already in the room');
+                return;
+            }
 
+            const newParticipant = { socketId: socket.id, name };
             room.participants.push(newParticipant);
             await room.save();
 
@@ -66,33 +65,28 @@ io.on('connection', (socket) => {
             // Notify others in the room about the new participant
             socket.to(roomId).emit('user_joined', newParticipant);
 
-            console.log(`User ${name} joined room ${roomId} at position ${position}`);
+            console.log(`User ${name} joined room ${roomId}`);
         } catch (error) {
             console.error('Error in join_room:', error);
         }
     });
 
-    // Handle offer
+    // Handle WebRTC signaling (offer, answer, ICE candidates)
     socket.on('offer', (data) => {
-        console.log(`Offer received from ${socket.id} to ${data.targetSocketId}`);
         io.to(data.targetSocketId).emit('offer', {
             sdp: data.sdp,
             fromSocketId: socket.id,
         });
     });
 
-    // Handle answer
     socket.on('answer', (data) => {
-        console.log(`Answer received from ${socket.id} to ${data.targetSocketId}`);
         io.to(data.targetSocketId).emit('answer', {
             sdp: data.sdp,
             fromSocketId: socket.id,
         });
     });
 
-    // Handle ICE candidates
     socket.on('ice_candidate', (data) => {
-        console.log(`ICE candidate received from ${socket.id} to ${data.targetSocketId}`);
         io.to(data.targetSocketId).emit('ice_candidate', {
             candidate: data.candidate,
             fromSocketId: socket.id,
